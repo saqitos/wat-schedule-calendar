@@ -13,20 +13,17 @@ function getEndTime(n) {
     return times[n - 1];
 }
 
-// Converts DD_MM_YYYY and HH:mm into ICS timestamp format (YYYYMMDDTHHmm00)
-function formatICSDate(dateClass, timeStr) {
-    const [dd, mm, yyyy] = dateClass.split('_');
-    const [hh, min] = timeStr.split(':');
-    return `${yyyy}${mm}${dd}T${hh}${min}00`;
-}
-
 async function scrape() {
     console.log("Fetching schedule...");
     const url = 'https://planzajec.wcy.wat.edu.pl/pl/rozklad?grupa_id=WCY25KX1S4';
-    const { data } = await axios.get(url);
+    
+    // Pass a User-Agent so the server doesn't reject the automated request
+    const { data } = await axios.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+    
     const $ = cheerio.load(data);
 
-    // Initialize the iCalendar file string with the Warsaw Timezone
     let icsContent = `BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//WAT Schedule//EN
@@ -52,50 +49,47 @@ END:VTIMEZONE\n`;
 
     const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    $('.day').each((i, dayEl) => {
-        // Find the class like "14_04_2026"
-        const classes = $(dayEl).attr('class').split(' ');
-        const dateClass = classes.find(c => c.match(/\d{2}_\d{2}_\d{4}/));
-        if (!dateClass) return;
+    // Loop directly through the hidden lessons data embedded in the raw HTML
+    $('.lesson').each((i, el) => {
+        const dateStr = $(el).find('.date').text().trim(); // Format: YYYY_MM_DD
+        const blockIdStr = $(el).find('.block_id').text().trim(); // Format: block1
+        
+        // Emulate childNodes extraction by splitting out the <br> tags
+        let textParts = [];
+        $(el).find('.name').contents().each((_, child) => {
+            if (child.type === 'text') {
+                const txt = $(child).text().trim();
+                if (txt) textParts.push(txt);
+            }
+        });
 
-        let n = 1;
-        $(dayEl).find('.block').each((j, blokEl) => {
-            const htmlContent = $(blokEl).html();
+        // Ignore JoM (Język obcy)
+        if (textParts.length > 0 && textParts[0] !== 'JoM') {
+            const n = parseInt(blockIdStr.replace('block', ''));
+            const text = textParts.join(' ');
             
-            if (htmlContent && htmlContent.trim() !== '') {
-                // Emulate your childNodes text extraction logic by grouping valid text nodes
-                let textParts = [];
-                $(blokEl).contents().each((_, el) => {
-                    if (el.type === 'text') {
-                        const txt = $(el).text().trim();
-                        if (txt) textParts.push(txt);
-                    }
-                });
+            // Format the dates for ICS
+            const [yyyy, mm, dd] = dateStr.split('_');
+            const startStr = `${yyyy}${mm}${dd}T${getStartTime(n).replace(':', '')}00`;
+            const endStr = `${yyyy}${mm}${dd}T${getEndTime(n).replace(':', '')}00`;
+            const uid = `${dateStr}-${n}-WCY25KX1S4@wat.edu.pl`;
 
-                const text = textParts.join(' ');
+            // Bonus: Since we found the raw data, we can also extract the full description!
+            const description = $(el).find('.info').text().trim();
 
-                // Ignore JoM (Język obcy) per your original script
-                if (textParts.length > 0 && textParts[0] !== 'JoM') {
-                    const start = formatICSDate(dateClass, getStartTime(n));
-                    const end = formatICSDate(dateClass, getEndTime(n));
-                    const uid = `${dateClass}-${n}-WCY25KX1S4@wat.edu.pl`;
-
-                    icsContent += `BEGIN:VEVENT
+            icsContent += `BEGIN:VEVENT
 UID:${uid}
 DTSTAMP:${now}
-DTSTART;TZID=Europe/Warsaw:${start}
-DTEND;TZID=Europe/Warsaw:${end}
+DTSTART;TZID=Europe/Warsaw:${startStr}
+DTEND;TZID=Europe/Warsaw:${endStr}
 SUMMARY:${text}
+DESCRIPTION:${description}
 END:VEVENT\n`;
-                }
-            }
-            n++;
-        });
+        }
     });
 
-    icsContent += `END:VCALENDAR`;
+    icsContent += `END:VCALENDAR\n`;
 
-    // Save to a public folder for GitHub Pages to host
     const publicDir = path.join(__dirname, 'public');
     if (!fs.existsSync(publicDir)){
         fs.mkdirSync(publicDir);
