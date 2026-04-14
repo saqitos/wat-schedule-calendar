@@ -2,7 +2,7 @@ name: Update Calendar
 on:
   schedule:
     # Runs automatically at midnight and 12:00 PM UTC every day
-    - cron: '0 0,12 * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch: # Allows you to run it manually from the Actions tab
 
 permissions:
