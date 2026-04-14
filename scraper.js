@@ -17,12 +17,25 @@ async function scrape() {
     console.log("Fetching schedule...");
     const url = 'https://planzajec.wcy.wat.edu.pl/pl/rozklad?grupa_id=WCY25KX1S4';
     
-    // Pass a User-Agent so the server doesn't reject the automated request
+    // Pass standard browser headers to avoid Imperva firewall blocks
     const { data } = await axios.get(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        headers: { 
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7'
+        }
     });
     
     const $ = cheerio.load(data);
+    const lessons = $('.lesson');
+    
+    console.log(`Found ${lessons.length} lessons on the page.`);
+    
+    if (lessons.length === 0) {
+        // If the firewall blocked us, the title will usually say "Incapsula" or "Just a moment"
+        console.log("Page title:", $('title').text());
+        throw new Error("No lessons found! The university firewall (Imperva) likely blocked the GitHub Actions IP.");
+    }
 
     let icsContent = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -49,12 +62,10 @@ END:VTIMEZONE\n`;
 
     const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    // Loop directly through the hidden lessons data embedded in the raw HTML
-    $('.lesson').each((i, el) => {
-        const dateStr = $(el).find('.date').text().trim(); // Format: YYYY_MM_DD
-        const blockIdStr = $(el).find('.block_id').text().trim(); // Format: block1
+    lessons.each((i, el) => {
+        const dateStr = $(el).find('.date').text().trim();
+        const blockIdStr = $(el).find('.block_id').text().trim();
         
-        // Emulate childNodes extraction by splitting out the <br> tags
         let textParts = [];
         $(el).find('.name').contents().each((_, child) => {
             if (child.type === 'text') {
@@ -63,18 +74,14 @@ END:VTIMEZONE\n`;
             }
         });
 
-        // Ignore JoM (Język obcy)
         if (textParts.length > 0 && textParts[0] !== 'JoM') {
             const n = parseInt(blockIdStr.replace('block', ''));
             const text = textParts.join(' ');
             
-            // Format the dates for ICS
             const [yyyy, mm, dd] = dateStr.split('_');
             const startStr = `${yyyy}${mm}${dd}T${getStartTime(n).replace(':', '')}00`;
             const endStr = `${yyyy}${mm}${dd}T${getEndTime(n).replace(':', '')}00`;
             const uid = `${dateStr}-${n}-WCY25KX1S4@wat.edu.pl`;
-
-            // Bonus: Since we found the raw data, we can also extract the full description!
             const description = $(el).find('.info').text().trim();
 
             icsContent += `BEGIN:VEVENT
@@ -98,4 +105,7 @@ END:VEVENT\n`;
     console.log("Successfully generated public/schedule.ics!");
 }
 
-scrape().catch(console.error);
+scrape().catch(err => {
+    console.error(err.message);
+    process.exit(1); // Fails the GitHub Action so it doesn't upload a blank calendar
+});
